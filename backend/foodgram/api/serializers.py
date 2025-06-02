@@ -75,7 +75,9 @@ class CustomUserSerializer(UserSerializer):
                 host = request.get_host()
                 if host.startswith('localhost:3000'):
                     host = 'localhost'
-                representation['avatar'] = f'{scheme}://{host}{instance.avatar.url}'
+                representation['avatar'] = (
+                    f'{scheme}://{host}{instance.avatar.url}'
+                )
             else:
                 representation['avatar'] = instance.avatar.url
         return representation
@@ -159,21 +161,25 @@ class RecipeSerializer(serializers.ModelSerializer):
                 host = request.get_host()
                 if host.startswith('localhost:3000'):
                     host = 'localhost'
-                representation['image'] = f'{scheme}://{host}{instance.image.url}'
+                representation['image'] = (
+                    f'{scheme}://{host}{instance.image.url}'
+                )
             else:
                 representation['image'] = instance.image.url
-        
+
         # Добавляем информацию о подписке для автора
         if instance.author:
             user = self.context.get('request').user
             if not user.is_anonymous:
-                representation['author']['is_subscribed'] = Follow.objects.filter(
-                    user=user,
-                    author=instance.author
-                ).exists()
+                representation['author']['is_subscribed'] = (
+                    Follow.objects.filter(
+                        user=user,
+                        author=instance.author
+                    ).exists()
+                )
             else:
                 representation['author']['is_subscribed'] = False
-        
+
         return representation
 
 
@@ -239,7 +245,9 @@ class RecipeMinifiedSerializer(serializers.ModelSerializer):
                 host = request.get_host()
                 if host.startswith('localhost:3000'):
                     host = 'localhost'
-                representation['image'] = f'{scheme}://{host}{instance.image.url}'
+                representation['image'] = (
+                    f'{scheme}://{host}{instance.image.url}'
+                )
             else:
                 representation['image'] = instance.image.url
         return representation
@@ -349,7 +357,9 @@ class SubscriptionSerializer(serializers.ModelSerializer):
                 host = request.get_host()
                 if host.startswith('localhost:3000'):
                     host = 'localhost:3000'
-                representation['avatar'] = f'{scheme}://{host}{instance.avatar.url}'
+                representation['avatar'] = (
+                    f'{scheme}://{host}{instance.avatar.url}'
+                )
             else:
                 representation['avatar'] = instance.avatar.url
-        return representation 
+        return representation

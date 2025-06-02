@@ -34,4 +34,4 @@ class IsOwnerOrReadOnly(permissions.BasePermission):
         return (
             request.method in permissions.SAFE_METHODS
             or obj.user == request.user
-        ) 
+        )
