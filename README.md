@@ -1,3 +1,5 @@
+# ДИПЛОМНЫЙ ПРОЕКТ FOODGRAM по дисциплине "Бекэнд-разработка" от Яндекс.Практикума
+
 # Подготовка приложения:
 
 ## 1. Переменные окружения
@@ -24,14 +26,18 @@ DB_PORT=5432
 
 Оставаясь в той же директории, выполните применение миграций в базе данных:
 
-```docker-compose exec backend python manage.py makemigrations
-docker-compose exec backend python manage.py migrate```
+```
+docker-compose exec backend python manage.py makemigrations
+docker-compose exec backend python manage.py migrate
+```
 
 ## 4. Загрузка статических файлов
 
 Оставаясь в той же директории, загрузите статические файлы с помощью комманды:
 
-```docker-compose exec backend python manage.py collectstatic --noinput```
+```
+docker-compose exec backend python manage.py collectstatic --noinput
+```
 
 Очистите кэш, чтобы статические файлы отобразились.
 
