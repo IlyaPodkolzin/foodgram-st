@@ -10,7 +10,8 @@ from recipes.models import (
     Recipe,
     RecipeIngredient,
     Favorite,
-    ShoppingCart
+    ShoppingCart,
+    Follow
 )
 
 User = get_user_model()
@@ -43,7 +44,7 @@ class CustomUserCreateSerializer(UserCreateSerializer):
 class CustomUserSerializer(UserSerializer):
     """Сериализатор для пользователя."""
     is_subscribed = serializers.SerializerMethodField()
-    avatar = Base64ImageField(required=False)
+    avatar = Base64ImageField(required=False, allow_null=True)
 
     class Meta:
         model = User
@@ -62,7 +63,7 @@ class CustomUserSerializer(UserSerializer):
         user = self.context.get('request').user
         if user.is_anonymous:
             return False
-        return user.following.filter(id=obj.id).exists()
+        return Follow.objects.filter(user=user, author=obj).exists()
 
     def to_representation(self, instance):
         """Преобразование объекта в JSON."""
@@ -70,7 +71,6 @@ class CustomUserSerializer(UserSerializer):
         if instance.avatar:
             request = self.context.get('request')
             if request is not None:
-                # Формируем полный URL с учетом прокси
                 scheme = request.scheme
                 host = request.get_host()
                 if host.startswith('localhost:3000'):
@@ -102,6 +102,12 @@ class RecipeIngredientSerializer(serializers.ModelSerializer):
     class Meta:
         model = RecipeIngredient
         fields = ('id', 'name', 'measurement_unit', 'amount')
+
+    def to_representation(self, instance):
+        """Преобразование объекта в JSON."""
+        representation = super().to_representation(instance)
+        representation['id'] = instance.ingredient.id
+        return representation
 
 
 class RecipeSerializer(serializers.ModelSerializer):
@@ -149,7 +155,6 @@ class RecipeSerializer(serializers.ModelSerializer):
         if instance.image:
             request = self.context.get('request')
             if request is not None:
-                # Формируем полный URL с учетом прокси
                 scheme = request.scheme
                 host = request.get_host()
                 if host.startswith('localhost:3000'):
@@ -157,6 +162,18 @@ class RecipeSerializer(serializers.ModelSerializer):
                 representation['image'] = f'{scheme}://{host}{instance.image.url}'
             else:
                 representation['image'] = instance.image.url
+        
+        # Добавляем информацию о подписке для автора
+        if instance.author:
+            user = self.context.get('request').user
+            if not user.is_anonymous:
+                representation['author']['is_subscribed'] = Follow.objects.filter(
+                    user=user,
+                    author=instance.author
+                ).exists()
+            else:
+                representation['author']['is_subscribed'] = False
+        
         return representation
 
 
@@ -199,6 +216,10 @@ class RecipeCreateSerializer(serializers.ModelSerializer):
                 amount=ingredient_data['amount']
             )
         return instance
+
+    def to_representation(self, instance):
+        """Преобразование объекта в JSON."""
+        return RecipeSerializer(instance, context=self.context).data
 
 
 class RecipeMinifiedSerializer(serializers.ModelSerializer):
@@ -249,4 +270,86 @@ class ShoppingCartSerializer(serializers.ModelSerializer):
                 fields=('user', 'recipe'),
                 message='Рецепт уже в списке покупок'
             )
-        ] 
+        ]
+
+
+class RecipeShortLinkSerializer(serializers.ModelSerializer):
+    """Сериализатор для короткой ссылки рецепта."""
+    short_link = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Recipe
+        fields = ('short_link',)
+
+    def get_short_link(self, obj):
+        """Получение или генерация короткой ссылки."""
+        if not obj.short_link:
+            obj.generate_short_link()
+        
+        request = self.context.get('request')
+        scheme = request.scheme
+        host = request.get_host()
+        if host.startswith('localhost:3000'):
+            host = 'localhost:3000'
+        return f'{scheme}://{host}/api/recipes/short/{obj.short_link}/'
+
+    def to_representation(self, instance):
+        """Преобразование объекта в JSON."""
+        representation = super().to_representation(instance)
+        return {'short-link': representation['short_link']}
+
+
+class SubscriptionSerializer(serializers.ModelSerializer):
+    """Сериализатор для подписок."""
+    recipes = serializers.SerializerMethodField()
+    recipes_count = serializers.SerializerMethodField()
+    is_subscribed = serializers.SerializerMethodField()
+    avatar = Base64ImageField(required=False, allow_null=True)
+
+    class Meta:
+        model = User
+        fields = (
+            'email',
+            'id',
+            'username',
+            'first_name',
+            'last_name',
+            'is_subscribed',
+            'recipes',
+            'recipes_count',
+            'avatar'
+        )
+
+    def get_recipes(self, obj):
+        """Получение рецептов автора."""
+        request = self.context.get('request')
+        recipes_limit = request.query_params.get('recipes_limit', 3)
+        recipes = obj.recipes.all()[:int(recipes_limit)]
+        return RecipeMinifiedSerializer(
+            recipes,
+            many=True,
+            context=self.context
+        ).data
+
+    def get_recipes_count(self, obj):
+        """Получение количества рецептов автора."""
+        return obj.recipes.count()
+
+    def get_is_subscribed(self, obj):
+        """Проверка подписки на пользователя."""
+        return True
+
+    def to_representation(self, instance):
+        """Преобразование объекта в JSON."""
+        representation = super().to_representation(instance)
+        if instance.avatar:
+            request = self.context.get('request')
+            if request is not None:
+                scheme = request.scheme
+                host = request.get_host()
+                if host.startswith('localhost:3000'):
+                    host = 'localhost:3000'
+                representation['avatar'] = f'{scheme}://{host}{instance.avatar.url}'
+            else:
+                representation['avatar'] = instance.avatar.url
+        return representation 

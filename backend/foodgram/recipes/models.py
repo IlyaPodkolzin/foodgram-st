@@ -22,7 +22,8 @@ class User(AbstractUser):
         'Аватар',
         upload_to='users/avatars/',
         null=True,
-        blank=True
+        blank=True,
+        max_length=255
     )
 
     USERNAME_FIELD = 'email'
@@ -95,6 +96,13 @@ class Recipe(models.Model):
         'Дата публикации',
         auto_now_add=True
     )
+    short_link = models.CharField(
+        'Короткая ссылка',
+        max_length=50,
+        unique=True,
+        null=True,
+        blank=True
+    )
 
     class Meta:
         verbose_name = 'Рецепт'
@@ -103,6 +111,28 @@ class Recipe(models.Model):
 
     def __str__(self):
         return self.name
+
+    def generate_short_link(self):
+        """Генерация короткой ссылки для рецепта."""
+        import hashlib
+        import time
+        
+        # Используем id и timestamp для уникальности
+        unique_string = f"{self.id}_{time.time()}"
+        # Создаем хеш
+        hash_object = hashlib.md5(unique_string.encode())
+        # Берем первые 8 символов хеша
+        short_link = hash_object.hexdigest()[:8]
+        
+        # Проверяем уникальность
+        while Recipe.objects.filter(short_link=short_link).exists():
+            unique_string = f"{unique_string}_{time.time()}"
+            hash_object = hashlib.md5(unique_string.encode())
+            short_link = hash_object.hexdigest()[:8]
+        
+        self.short_link = short_link
+        self.save()
+        return short_link
 
 
 class RecipeIngredient(models.Model):

@@ -1,20 +1,24 @@
-from django.shortcuts import render
+from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth import get_user_model
 from django.db.models import Sum
 from django.http import HttpResponse
-from django.shortcuts import get_object_or_404
 from djoser.views import UserViewSet
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework.pagination import PageNumberPagination
+import base64
+from django.core.files.base import ContentFile
 
 from recipes.models import (
     Ingredient,
     Recipe,
     RecipeIngredient,
     Favorite,
-    ShoppingCart
+    ShoppingCart,
+    Follow
 )
 from .serializers import (
     CustomUserSerializer,
@@ -23,16 +27,82 @@ from .serializers import (
     RecipeCreateSerializer,
     RecipeMinifiedSerializer,
     FavoriteSerializer,
-    ShoppingCartSerializer
+    ShoppingCartSerializer,
+    RecipeShortLinkSerializer,
+    SubscriptionSerializer
 )
+from .permissions import IsAuthorOrReadOnly, IsOwnerOrReadOnly
 
 User = get_user_model()
+
+
+class CustomPagination(PageNumberPagination):
+    """Кастомная пагинация."""
+    page_size = 6
+    page_size_query_param = 'limit'
 
 
 class CustomUserViewSet(UserViewSet):
     """Представление для пользователей."""
     queryset = User.objects.all()
     serializer_class = CustomUserSerializer
+    permission_classes = [IsOwnerOrReadOnly]
+    pagination_class = CustomPagination
+
+    def get_permissions(self):
+        """Выбор разрешений в зависимости от действия."""
+        if self.action in ('list', 'retrieve', 'create'):
+            return []
+        return super().get_permissions()
+
+    @action(
+        detail=False,
+        methods=['put', 'delete'],
+        permission_classes=[IsAuthenticated],
+        url_path='me/avatar'
+    )
+    def avatar(self, request):
+        """Загрузка/удаление аватара пользователя."""
+        user = request.user
+        if request.method == 'PUT':
+            # Проверяем наличие файла в request.FILES
+            if 'avatar' in request.FILES:
+                user.avatar = request.FILES['avatar']
+            # Проверяем наличие base64 изображения в request.data
+            elif 'avatar' in request.data:
+                try:
+                    # Декодируем base64 строку
+                    format, imgstr = request.data['avatar'].split(';base64,')
+                    ext = format.split('/')[-1]
+                    # Создаем временный файл
+                    data = ContentFile(
+                        base64.b64decode(imgstr),
+                        name=f'avatar.{ext}'
+                    )
+                    user.avatar = data
+                except Exception as e:
+                    return Response(
+                        {'error': 'Неверный формат изображения'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            else:
+                return Response(
+                    {'error': 'Файл не найден'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            user.save()
+            serializer = self.get_serializer(user)
+            return Response(serializer.data)
+        
+        if request.method == 'DELETE':
+            if not user.avatar:
+                return Response(
+                    {'error': 'Аватар не найден'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            user.avatar.delete()
+            user.save()
+            return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(
         detail=True,
@@ -55,17 +125,21 @@ class CustomUserViewSet(UserViewSet):
                     {'error': 'Вы уже подписаны на этого пользователя'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            user.following.add(author)
-            serializer = self.get_serializer(author)
+            Follow.objects.create(user=user, author=author)
+            serializer = SubscriptionSerializer(
+                author,
+                context={'request': request}
+            )
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         if request.method == 'DELETE':
-            if not user.following.filter(id=author.id).exists():
+            follow = Follow.objects.filter(user=user, author=author)
+            if not follow.exists():
                 return Response(
                     {'error': 'Вы не подписаны на этого пользователя'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            user.following.remove(author)
+            follow.delete()
             return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(
@@ -75,8 +149,21 @@ class CustomUserViewSet(UserViewSet):
     def subscriptions(self, request):
         """Получение списка подписок."""
         user = request.user
-        following = user.following.all()
-        serializer = self.get_serializer(following, many=True)
+        # Получаем авторов из подписок
+        authors = User.objects.filter(followers__user=user)
+        page = self.paginate_queryset(authors)
+        if page is not None:
+            serializer = SubscriptionSerializer(
+                page,
+                many=True,
+                context={'request': request}
+            )
+            return self.get_paginated_response(serializer.data)
+        serializer = SubscriptionSerializer(
+            authors,
+            many=True,
+            context={'request': request}
+        )
         return Response(serializer.data)
 
 
@@ -98,12 +185,20 @@ class IngredientViewSet(viewsets.ReadOnlyModelViewSet):
 class RecipeViewSet(viewsets.ModelViewSet):
     """Представление для рецептов."""
     queryset = Recipe.objects.all()
-    permission_classes = (IsAuthenticated,)
+    permission_classes = [IsAuthorOrReadOnly]
+
+    def get_permissions(self):
+        """Выбор разрешений в зависимости от действия."""
+        if self.action in ('list', 'retrieve'):
+            return []
+        return super().get_permissions()
 
     def get_serializer_class(self):
         """Выбор сериализатора в зависимости от действия."""
         if self.action in ('create', 'partial_update'):
             return RecipeCreateSerializer
+        if self.action == 'get_link':
+            return RecipeShortLinkSerializer
         return RecipeSerializer
 
     def get_queryset(self):
@@ -128,6 +223,17 @@ class RecipeViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         """Создание рецепта."""
         serializer.save(author=self.request.user)
+
+    @action(
+        detail=True,
+        methods=['get'],
+        url_path='get-link'
+    )
+    def get_link(self, request, pk=None):
+        """Получение короткой ссылки на рецепт."""
+        recipe = self.get_object()
+        serializer = self.get_serializer(recipe)
+        return Response(serializer.data)
 
     @action(
         detail=True,
@@ -211,3 +317,11 @@ class RecipeViewSet(viewsets.ModelViewSet):
             'attachment; filename="shopping_list.txt"'
         )
         return response
+
+
+class RecipeShortLinkView(APIView):
+    """Представление для обработки коротких ссылок на рецепты."""
+    def get(self, request, short_link):
+        """Перенаправление на страницу рецепта по короткой ссылке."""
+        recipe = get_object_or_404(Recipe, short_link=short_link)
+        return redirect(f'/recipes/{recipe.id}/')
