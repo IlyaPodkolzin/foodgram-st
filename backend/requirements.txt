@@ -1,0 +1,7 @@
+Django==4.2.10
+djangorestframework==3.14.0
+djoser==2.2.0
+Pillow==10.2.0
+psycopg2-binary==2.9.9
+python-dotenv==1.0.1
+gunicorn==21.2.0 
