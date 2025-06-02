@@ -4,6 +4,7 @@
 
 Создайте файл backend/.env
 
+'''
 DEBUG=False
 SECRET_KEY='your-secret-key-here'
 ALLOWED_HOSTS=localhost,127.0.0.1
@@ -13,6 +14,7 @@ POSTGRES_USER=postgres
 POSTGRES_PASSWORD=postgres
 DB_HOST=db
 DB_PORT=5432
+'''
 
 ## 2. Сборка проекта
 
