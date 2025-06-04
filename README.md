@@ -16,6 +16,7 @@ POSTGRES_USER=postgres
 POSTGRES_PASSWORD=postgres
 DB_HOST=db
 DB_PORT=5432
+HOST=localhost:3000
 ```
 
 ### 2. Сборка проекта
