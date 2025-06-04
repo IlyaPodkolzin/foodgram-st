@@ -3,6 +3,7 @@ from djoser.serializers import UserCreateSerializer, UserSerializer
 from rest_framework import serializers
 from rest_framework.validators import UniqueTogetherValidator
 import base64
+import os
 from django.core.files.base import ContentFile
 
 from recipes.models import (
@@ -13,6 +14,14 @@ from recipes.models import (
     ShoppingCart,
     Follow
 )
+
+
+# Константы для валидации
+MIN_COOKING_TIME = 1
+MAX_COOKING_TIME = 32000
+MIN_AMOUNT = 1
+MAX_AMOUNT = 32000
+
 
 User = get_user_model()
 
@@ -60,10 +69,10 @@ class CustomUserSerializer(UserSerializer):
 
     def get_is_subscribed(self, obj):
         """Проверка подписки на пользователя."""
-        user = self.context.get('request').user
+        user = self.context['request'].user
         if user.is_anonymous:
             return False
-        return Follow.objects.filter(user=user, author=obj).exists()
+        return obj.followers.filter(user=user).exists()
 
     def to_representation(self, instance):
         """Преобразование объекта в JSON."""
@@ -73,7 +82,7 @@ class CustomUserSerializer(UserSerializer):
             if request is not None:
                 scheme = request.scheme
                 host = request.get_host()
-                if host.startswith('localhost:3000'):
+                if host.startswith(os.getenv('HOST')):
                     host = 'localhost'
                 representation['avatar'] = (
                     f'{scheme}://{host}{instance.avatar.url}'
@@ -81,6 +90,32 @@ class CustomUserSerializer(UserSerializer):
             else:
                 representation['avatar'] = instance.avatar.url
         return representation
+
+
+class AvatarSerializer(serializers.ModelSerializer):
+    """Сериализатор для операций с аватаром пользователя."""
+    avatar = Base64ImageField(required=False, allow_null=True)
+
+    class Meta:
+        model = User
+        fields = ('avatar',)
+
+    def validate_avatar(self, value):
+        """Валидация аватара."""
+        if not value and 'avatar' not in self.initial_data:
+            raise serializers.ValidationError('Файл не найден')
+        return value
+
+    def update(self, instance, validated_data):
+        """Обновление аватара."""
+        if 'avatar' in validated_data:
+            instance.avatar = validated_data['avatar']
+            instance.save()
+        return instance
+
+    def to_representation(self, instance):
+        """Преобразование объекта в JSON."""
+        return CustomUserSerializer(instance, context=self.context).data
 
 
 class IngredientSerializer(serializers.ModelSerializer):
@@ -99,7 +134,10 @@ class RecipeIngredientSerializer(serializers.ModelSerializer):
     measurement_unit = serializers.ReadOnlyField(
         source='ingredient.measurement_unit'
     )
-    amount = serializers.IntegerField(min_value=1)
+    amount = serializers.IntegerField(
+        min_value=MIN_AMOUNT,
+        max_value=MAX_AMOUNT
+    )
 
     class Meta:
         model = RecipeIngredient
@@ -139,14 +177,14 @@ class RecipeSerializer(serializers.ModelSerializer):
 
     def get_is_favorited(self, obj):
         """Проверка нахождения рецепта в избранном."""
-        user = self.context.get('request').user
+        user = self.context['request'].user
         if user.is_anonymous:
             return False
         return user.favorites.filter(recipe=obj).exists()
 
     def get_is_in_shopping_cart(self, obj):
         """Проверка нахождения рецепта в списке покупок."""
-        user = self.context.get('request').user
+        user = self.context['request'].user
         if user.is_anonymous:
             return False
         return user.shopping_cart.filter(recipe=obj).exists()
@@ -159,7 +197,7 @@ class RecipeSerializer(serializers.ModelSerializer):
             if request is not None:
                 scheme = request.scheme
                 host = request.get_host()
-                if host.startswith('localhost:3000'):
+                if host.startswith(os.getenv('HOST')):
                     host = 'localhost'
                 representation['image'] = (
                     f'{scheme}://{host}{instance.image.url}'
@@ -169,12 +207,11 @@ class RecipeSerializer(serializers.ModelSerializer):
 
         # Добавляем информацию о подписке для автора
         if instance.author:
-            user = self.context.get('request').user
+            user = self.context['request'].user
             if not user.is_anonymous:
                 representation['author']['is_subscribed'] = (
-                    Follow.objects.filter(
-                        user=user,
-                        author=instance.author
+                    instance.author.followers.filter(
+                        user=user
                     ).exists()
                 )
             else:
@@ -187,6 +224,10 @@ class RecipeCreateSerializer(serializers.ModelSerializer):
     """Сериализатор для создания рецепта."""
     ingredients = RecipeIngredientSerializer(many=True)
     image = Base64ImageField()
+    cooking_time = serializers.IntegerField(
+        min_value=MIN_COOKING_TIME,
+        max_value=MAX_COOKING_TIME
+    )
 
     class Meta:
         model = Recipe
@@ -202,12 +243,7 @@ class RecipeCreateSerializer(serializers.ModelSerializer):
         """Создание рецепта."""
         ingredients_data = validated_data.pop('ingredients')
         recipe = Recipe.objects.create(**validated_data)
-        for ingredient_data in ingredients_data:
-            RecipeIngredient.objects.create(
-                recipe=recipe,
-                ingredient=ingredient_data['id'],
-                amount=ingredient_data['amount']
-            )
+        self._create_ingredients(recipe, ingredients_data)
         return recipe
 
     def update(self, instance, validated_data):
@@ -215,13 +251,20 @@ class RecipeCreateSerializer(serializers.ModelSerializer):
         ingredients_data = validated_data.pop('ingredients')
         instance = super().update(instance, validated_data)
         instance.ingredients.clear()
-        for ingredient_data in ingredients_data:
-            RecipeIngredient.objects.create(
-                recipe=instance,
+        self._create_ingredients(instance, ingredients_data)
+        return instance
+
+    def _create_ingredients(self, recipe, ingredients_data):
+        """Создание связей рецепта с ингредиентами."""
+        ingredients = [
+            RecipeIngredient(
+                recipe=recipe,
                 ingredient=ingredient_data['id'],
                 amount=ingredient_data['amount']
             )
-        return instance
+            for ingredient_data in ingredients_data
+        ]
+        RecipeIngredient.objects.bulk_create(ingredients)
 
     def to_representation(self, instance):
         """Преобразование объекта в JSON."""
@@ -243,7 +286,7 @@ class RecipeMinifiedSerializer(serializers.ModelSerializer):
                 # Формируем полный URL с учетом прокси
                 scheme = request.scheme
                 host = request.get_host()
-                if host.startswith('localhost:3000'):
+                if host.startswith(os.getenv('HOST')):
                     host = 'localhost'
                 representation['image'] = (
                     f'{scheme}://{host}{instance.image.url}'
@@ -293,11 +336,11 @@ class RecipeShortLinkSerializer(serializers.ModelSerializer):
         """Получение или генерация короткой ссылки."""
         if not obj.short_link:
             obj.generate_short_link()
-        
+
         request = self.context.get('request')
         scheme = request.scheme
         host = request.get_host()
-        if host.startswith('localhost:3000'):
+        if host.startswith(os.getenv("HOST")):
             host = 'localhost:3000'
         return f'{scheme}://{host}/api/recipes/short/{obj.short_link}/'
 
@@ -355,7 +398,7 @@ class SubscriptionSerializer(serializers.ModelSerializer):
             if request is not None:
                 scheme = request.scheme
                 host = request.get_host()
-                if host.startswith('localhost:3000'):
+                if host.startswith(os.getenv("HOST")):
                     host = 'localhost:3000'
                 representation['avatar'] = (
                     f'{scheme}://{host}{instance.avatar.url}'
@@ -363,3 +406,43 @@ class SubscriptionSerializer(serializers.ModelSerializer):
             else:
                 representation['avatar'] = instance.avatar.url
         return representation
+
+
+class SubscriptionCreateSerializer(serializers.ModelSerializer):
+    """Сериализатор для создания подписки."""
+    class Meta:
+        model = Follow
+        fields = ('user', 'author')
+
+    def validate(self, data):
+        """Валидация данных подписки."""
+        user = data['user']
+        author = data['author']
+
+        if user == author:
+            raise serializers.ValidationError(
+                'Нельзя подписаться на самого себя'
+            )
+        if user.following.filter(id=author.id).exists():
+            raise serializers.ValidationError(
+                'Вы уже подписаны на этого пользователя'
+            )
+        return data
+
+
+class SubscriptionDeleteSerializer(serializers.ModelSerializer):
+    """Сериализатор для удаления подписки."""
+    class Meta:
+        model = Follow
+        fields = ('user', 'author')
+
+    def validate(self, data):
+        """Валидация данных подписки."""
+        user = data['user']
+        author = data['author']
+
+        if not author.followers.filter(user=user).exists():
+            raise serializers.ValidationError(
+                'Вы не подписаны на этого пользователя'
+            )
+        return data

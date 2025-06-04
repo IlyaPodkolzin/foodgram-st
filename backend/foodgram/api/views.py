@@ -1,4 +1,4 @@
-from django.shortcuts import render, get_object_or_404, redirect
+from django.shortcuts import get_object_or_404, redirect
 from django.contrib.auth import get_user_model
 from django.db.models import Sum
 from django.http import HttpResponse
@@ -9,16 +9,13 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.pagination import PageNumberPagination
-import base64
-from django.core.files.base import ContentFile
 
 from recipes.models import (
     Ingredient,
     Recipe,
     RecipeIngredient,
     Favorite,
-    ShoppingCart,
-    Follow
+    ShoppingCart
 )
 from .serializers import (
     CustomUserSerializer,
@@ -29,7 +26,10 @@ from .serializers import (
     FavoriteSerializer,
     ShoppingCartSerializer,
     RecipeShortLinkSerializer,
-    SubscriptionSerializer
+    SubscriptionSerializer,
+    SubscriptionCreateSerializer,
+    SubscriptionDeleteSerializer,
+    AvatarSerializer
 )
 from .permissions import IsAuthorOrReadOnly, IsOwnerOrReadOnly
 
@@ -65,35 +65,12 @@ class CustomUserViewSet(UserViewSet):
         """Загрузка/удаление аватара пользователя."""
         user = request.user
         if request.method == 'PUT':
-            # Проверяем наличие файла в request.FILES
-            if 'avatar' in request.FILES:
-                user.avatar = request.FILES['avatar']
-            # Проверяем наличие base64 изображения в request.data
-            elif 'avatar' in request.data:
-                try:
-                    # Декодируем base64 строку
-                    format, imgstr = request.data['avatar'].split(';base64,')
-                    ext = format.split('/')[-1]
-                    # Создаем временный файл
-                    data = ContentFile(
-                        base64.b64decode(imgstr),
-                        name=f'avatar.{ext}'
-                    )
-                    user.avatar = data
-                except Exception as e:
-                    return Response(
-                        {'error': 'Неверный формат изображения'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-            else:
-                return Response(
-                    {'error': 'Файл не найден'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            user.save()
-            serializer = self.get_serializer(user)
+            serializer = AvatarSerializer(user, data=request.data,
+                                          context={'request': request})
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
             return Response(serializer.data)
-        
+
         if request.method == 'DELETE':
             if not user.avatar:
                 return Response(
@@ -115,31 +92,25 @@ class CustomUserViewSet(UserViewSet):
         author = get_object_or_404(User, id=id)
 
         if request.method == 'POST':
-            if user == author:
-                return Response(
-                    {'error': 'Нельзя подписаться на самого себя'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            if user.following.filter(id=author.id).exists():
-                return Response(
-                    {'error': 'Вы уже подписаны на этого пользователя'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            Follow.objects.create(user=user, author=author)
-            serializer = SubscriptionSerializer(
-                author,
-                context={'request': request}
+            serializer = SubscriptionCreateSerializer(
+                data={'user': user.id, 'author': author.id}
             )
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            return Response(
+                SubscriptionSerializer(
+                    author,
+                    context={'request': request}
+                ).data,
+                status=status.HTTP_201_CREATED
+            )
 
         if request.method == 'DELETE':
-            follow = Follow.objects.filter(user=user, author=author)
-            if not follow.exists():
-                return Response(
-                    {'error': 'Вы не подписаны на этого пользователя'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            follow.delete()
+            serializer = SubscriptionDeleteSerializer(
+                data={'user': user.id, 'author': author.id}
+            )
+            serializer.is_valid(raise_exception=True)
+            author.followers.filter(user=user).delete()
             return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(
@@ -206,7 +177,8 @@ class RecipeViewSet(viewsets.ModelViewSet):
         queryset = Recipe.objects.all()
         author = self.request.query_params.get('author')
         is_favorited = self.request.query_params.get('is_favorited')
-        is_in_shopping_cart = self.request.query_params.get('is_in_shopping_cart')
+        is_in_shopping_cart = (self.request.
+                               query_params.get('is_in_shopping_cart'))
         tags = self.request.query_params.getlist('tags')
 
         if author:
