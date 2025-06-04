@@ -12,11 +12,21 @@ SECRET_KEY='your-secret-key-here'
 ALLOWED_HOSTS=localhost,127.0.0.1
 DB_ENGINE=django.db.backends.postgresql
 POSTGRES_DB=foodgram_db
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=postgres
+POSTGRES_USER='your_user'
+POSTGRES_PASSWORD='your_password'
 DB_HOST=db
 DB_PORT=5432
 HOST=localhost:3000
+```
+
+Создайте файл backend/foodgram/.env
+
+```
+POSTGRES_DB=foodgram_db
+POSTGRES_USER='your_user'
+POSTGRES_PASSWORD='your_password'
+DB_HOST=localhost
+DB_PORT=5432
 ```
 
 ### 2. Сборка проекта
@@ -41,6 +51,14 @@ docker-compose exec backend python manage.py collectstatic --noinput
 ```
 
 Очистите кэш, чтобы статические файлы отобразились.
+
+### 5. Загрузка ингредиентов
+
+Для загрузки ингредиентов из файла data/ingredients.csv, воспользуйтесь командой:
+
+```
+docker-compose exec backend python manage.py import_ingredients
+```
 
 ### По адресу http://localhost изучите фронтенд веб-приложения, а по адресу http://localhost/api/docs/ — спецификацию API.
 
